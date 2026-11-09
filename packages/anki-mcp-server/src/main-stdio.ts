@@ -1,0 +1,96 @@
+import { NestFactory } from "@nestjs/core";
+import type { CustomStrategy } from "@nestjs/microservices";
+import { StdioTransport } from "@rekog/mcp-nest";
+import { AppModule } from "./app.module";
+import {
+  createPinoLogger,
+  createLoggerService,
+  createMcpStrategy,
+  LOG_DESTINATION,
+} from "./bootstrap";
+import { createCli } from "./cli/cli-output";
+import { buildConfigInput, configSchema, transformEnvToConfig } from "./config";
+
+/**
+ * Parse minimal CLI args for STDIO mode.
+ * Only parses --read-only and --anki-connect flags.
+ */
+function parseStdioArgs(): { readOnly: boolean; ankiConnect?: string } {
+  const args = process.argv.slice(2);
+  let readOnly = false;
+  let ankiConnect: string | undefined;
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--read-only") {
+      readOnly = true;
+    } else if (args[i] === "--anki-connect" || args[i] === "-a") {
+      ankiConnect = args[i + 1];
+      i++; // Skip the next arg since we consumed it
+
+      // `-a ""` would otherwise resolve silently to the default (see parseAnkiConnectArg in cli/args.ts)
+      if (ankiConnect === "") {
+        throw new Error(
+          "AnkiConnect URL cannot be empty. Omit --anki-connect/-a to use the default (http://localhost:8765) or the ANKI_CONNECT_URL env var.",
+        );
+      }
+    }
+  }
+
+  return { readOnly, ankiConnect };
+}
+
+// STDIO mode has no --debug flag of its own; stack traces are off by default.
+const cli = createCli(false);
+
+async function bootstrap() {
+  // Parse CLI args for STDIO mode
+  const cliOptions = parseStdioArgs();
+
+  // Build config input from env + CLI overrides (no process.env mutation)
+  const configInput = buildConfigInput({
+    ankiConnect: cliOptions.ankiConnect,
+    readOnly: cliOptions.readOnly,
+  });
+
+  // Create logger that writes to stderr for STDIO mode (keeps stdout clear for MCP protocol)
+  // Log level comes from configInput (LOG_LEVEL env variable)
+  const pinoLogger = createPinoLogger(
+    LOG_DESTINATION.STDERR,
+    configInput.LOG_LEVEL || "info",
+  );
+  const loggerService = createLoggerService(pinoLogger);
+
+  // STDIO mode - the MCP strategy IS the microservice transport; there is no
+  // HTTP server. `listen()` starts the stdio transport, which owns stdin/stdout.
+  const validatedConfig = configSchema.parse(transformEnvToConfig(configInput));
+  const mcp = createMcpStrategy(
+    [new StdioTransport()],
+    validatedConfig.mcpServer,
+  );
+  const app = await NestFactory.createMicroservice<CustomStrategy>(
+    AppModule.forStdio(mcp, configInput),
+    {
+      strategy: mcp,
+      logger: loggerService,
+      bufferLogs: true,
+    },
+  );
+  await app.listen();
+
+  if (cliOptions.readOnly) {
+    pinoLogger.info("MCP STDIO server started in READ-ONLY mode");
+  } else {
+    pinoLogger.info("MCP STDIO server started successfully");
+  }
+
+  // Keep the application running
+  await new Promise(() => {});
+}
+
+bootstrap().catch((err) => {
+  cli.error(
+    `Failed to start MCP STDIO server: ${err instanceof Error ? err.message : String(err)}`,
+    err instanceof Error ? err : undefined,
+  );
+  process.exit(1);
+});

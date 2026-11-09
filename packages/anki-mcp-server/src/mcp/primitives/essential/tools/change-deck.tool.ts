@@ -1,0 +1,64 @@
+import { Logger } from "@nestjs/common";
+import { Payload } from "@nestjs/microservices";
+import { McpController, Tool } from "@rekog/mcp-nest";
+import { z } from "zod";
+import { AnkiConnectClient } from "@/mcp/clients/anki-connect.client";
+import { createErrorResponse } from "@/mcp/utils/anki.utils";
+import { changeDeck } from "./deckActions/actions/changeDeck.action";
+
+@McpController()
+export class ChangeDeckTool {
+  private readonly logger = new Logger(ChangeDeckTool.name);
+
+  constructor(private readonly ankiClient: AnkiConnectClient) {}
+
+  @Tool({
+    name: "changeDeck",
+    description:
+      "Move cards to a different deck. Target deck will be created if it doesn't exist.",
+    parameters: z.object({
+      cards: z.array(z.number()).describe("Array of card IDs to move"),
+      deck: z.string().describe("Target deck name"),
+    }),
+    outputSchema: z.object({
+      success: z.boolean(),
+      message: z.string(),
+      cardsAffected: z.number(),
+      targetDeck: z.string(),
+    }),
+    annotations: {
+      title: "Move Cards to Deck",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  })
+  async execute(@Payload() params: { cards: number[]; deck: string }) {
+    try {
+      this.logger.log(
+        `Executing changeDeck: ${params.cards?.length ?? 0} card(s) -> ${params.deck}`,
+      );
+
+      if (!params.cards || params.cards.length === 0) {
+        throw new Error("cards array is required for changeDeck action");
+      }
+      if (!params.deck) {
+        throw new Error("deck name is required for changeDeck action");
+      }
+
+      const result = await changeDeck(
+        { cards: params.cards, deck: params.deck },
+        this.ankiClient,
+      );
+
+      return result;
+    } catch (error) {
+      this.logger.error("Failed to execute changeDeck", error);
+      return createErrorResponse(error, {
+        action: "changeDeck",
+        hint: "This can happen when Anki is not running, the card IDs are invalid, or the deck name is wrong",
+      });
+    }
+  }
+}

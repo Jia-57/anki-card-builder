@@ -1,0 +1,70 @@
+import { Logger } from "@nestjs/common";
+import { Payload } from "@nestjs/microservices";
+import { McpController, Tool } from "@rekog/mcp-nest";
+import { z } from "zod";
+import { AnkiConnectClient } from "@/mcp/clients/anki-connect.client";
+import { createErrorResponse } from "@/mcp/utils/anki.utils";
+import { addTags } from "./tagActions/actions/addTags.action";
+
+@McpController()
+export class AddTagsTool {
+  private readonly logger = new Logger(AddTagsTool.name);
+
+  constructor(private readonly ankiClient: AnkiConnectClient) {}
+
+  @Tool({
+    name: "addTags",
+    description:
+      'Add tags to specified notes. Tags is a space-separated string (e.g., "tag1 tag2 tag3"). getTags lists existing tags, which helps avoid near-duplicates (e.g. "roman-empire" vs "roman_empire").',
+    parameters: z.object({
+      notes: z
+        .array(z.number())
+        .min(1)
+        .max(1000)
+        .describe("Array of note IDs to modify"),
+      tags: z
+        .string()
+        .describe('Space-separated tags to add (e.g., "tag1 tag2")'),
+    }),
+    outputSchema: z.object({
+      success: z.boolean(),
+      message: z.string(),
+      notesAffected: z.number(),
+      tagsAdded: z.array(z.string()),
+    }),
+    annotations: {
+      title: "Add Tags",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  })
+  async execute(@Payload() params: { notes: number[]; tags: string }) {
+    try {
+      this.logger.log(
+        `Executing addTags on ${params.notes?.length ?? 0} note(s)`,
+      );
+
+      if (!params.notes || params.notes.length === 0) {
+        throw new Error("notes array is required for addTags action");
+      }
+      if (!params.tags) {
+        throw new Error("tags string is required for addTags action");
+      }
+
+      const result = await addTags(
+        { notes: params.notes, tags: params.tags },
+        this.ankiClient,
+      );
+
+      return result;
+    } catch (error) {
+      this.logger.error("Failed to execute addTags", error);
+      return createErrorResponse(error, {
+        action: "addTags",
+        hint: "This can happen when Anki is not running or the note IDs are invalid",
+      });
+    }
+  }
+}

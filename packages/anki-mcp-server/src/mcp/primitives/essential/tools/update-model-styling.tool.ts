@@ -1,0 +1,160 @@
+import { Logger } from "@nestjs/common";
+import { Payload } from "@nestjs/microservices";
+import { McpController, Tool } from "@rekog/mcp-nest";
+import { z } from "zod";
+import { AnkiConnectClient } from "@/mcp/clients/anki-connect.client";
+import { createErrorResponse } from "@/mcp/utils/anki.utils";
+
+/**
+ * Tool for updating CSS styling of an existing model
+ */
+@McpController()
+export class UpdateModelStylingTool {
+  private readonly logger = new Logger(UpdateModelStylingTool.name);
+
+  constructor(private readonly ankiClient: AnkiConnectClient) {}
+
+  @Tool({
+    name: "updateModelStyling",
+    description:
+      "Update the CSS styling for an existing note type (model). " +
+      "This changes how cards of this type are rendered in Anki. " +
+      "Useful for adding RTL (Right-to-Left) support, changing fonts, colors, or layout. " +
+      "The given CSS replaces the note type's entire existing CSS (modelStyling returns the current CSS). " +
+      "Changes apply to all cards using this model.",
+    parameters: z.object({
+      modelName: z
+        .string()
+        .min(1)
+        .describe('Name of the model to update (e.g., "Basic", "Basic RTL")'),
+      css: z
+        .string()
+        .min(1)
+        .describe(
+          'New CSS styling content. For RTL languages, include "direction: rtl;" in .card class. ' +
+            "This will completely replace the existing CSS.",
+        ),
+    }),
+    outputSchema: z.object({
+      success: z.boolean(),
+      modelName: z.string(),
+      cssLength: z.number(),
+      cssInfo: z.object({
+        hasRtlSupport: z.boolean(),
+        hasCardStyling: z.boolean(),
+        hasFrontStyling: z.boolean(),
+        hasBackStyling: z.boolean(),
+        hasClozeStyling: z.boolean(),
+      }),
+      message: z.string(),
+      oldCssLength: z.number().optional(),
+      cssLengthChange: z.number().optional(),
+    }),
+    annotations: {
+      title: "Update Note Type CSS",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  })
+  async updateModelStyling(
+    @Payload() { modelName, css }: { modelName: string; css: string },
+  ) {
+    try {
+      this.logger.log(`Updating styling for model: ${modelName}`);
+
+      // Get current styling for comparison
+      let oldStyling: { css: string } | null = null;
+      try {
+        oldStyling = await this.ankiClient.invoke<{ css: string }>(
+          "modelStyling",
+          {
+            modelName,
+          },
+        );
+      } catch (_error) {
+        // Model might not exist, we'll catch this in the update call
+        this.logger.warn(`Could not fetch old styling for ${modelName}`);
+      }
+
+      // Update the styling
+      await this.ankiClient.invoke("updateModelStyling", {
+        model: {
+          name: modelName,
+          css,
+        },
+      });
+
+      this.logger.log(`Successfully updated styling for model: ${modelName}`);
+
+      // Analyze CSS for useful info
+      const cssLength = css.length;
+      const hasRtl =
+        css.includes("direction: rtl") || css.includes("direction:rtl");
+      const hasCardClass = css.includes(".card");
+      const hasFrontClass = css.includes(".front");
+      const hasBackClass = css.includes(".back");
+      const hasClozeClass = css.includes(".cloze");
+
+      const response: {
+        success: boolean;
+        modelName: string;
+        cssLength: number;
+        cssInfo: {
+          hasRtlSupport: boolean;
+          hasCardStyling: boolean;
+          hasFrontStyling: boolean;
+          hasBackStyling: boolean;
+          hasClozeStyling: boolean;
+        };
+        message: string;
+        oldCssLength?: number;
+        cssLengthChange?: number;
+      } = {
+        success: true,
+        modelName,
+        cssLength,
+        cssInfo: {
+          hasRtlSupport: hasRtl,
+          hasCardStyling: hasCardClass,
+          hasFrontStyling: hasFrontClass,
+          hasBackStyling: hasBackClass,
+          hasClozeStyling: hasClozeClass,
+        },
+        message: `Successfully updated CSS styling for model "${modelName}"`,
+      };
+
+      if (oldStyling) {
+        response.oldCssLength = oldStyling.css.length;
+        response.cssLengthChange = cssLength - oldStyling.css.length;
+      }
+
+      return response;
+    } catch (error) {
+      this.logger.error(
+        `Failed to update styling for model ${modelName}`,
+        error,
+      );
+
+      // Check for model not found error
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      if (
+        errorMessage.includes("not found") ||
+        errorMessage.includes("does not exist") ||
+        errorMessage.includes("model not found")
+      ) {
+        return createErrorResponse(error, {
+          modelName,
+          hint: "Model not found. modelNames lists the available models.",
+        });
+      }
+
+      return createErrorResponse(error, {
+        modelName,
+        hint: "This can happen when Anki is not running or the model name is wrong",
+      });
+    }
+  }
+}

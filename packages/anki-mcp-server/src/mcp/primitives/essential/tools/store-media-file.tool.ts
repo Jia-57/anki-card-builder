@@ -1,0 +1,86 @@
+import { Logger } from "@nestjs/common";
+import { Payload } from "@nestjs/microservices";
+import { McpController, Tool } from "@rekog/mcp-nest";
+import { z } from "zod";
+import { AnkiConnectClient } from "@/mcp/clients/anki-connect.client";
+import { createErrorResponse } from "@/mcp/utils/anki.utils";
+import { storeMediaFile } from "./mediaActions/actions/storeMediaFile.action";
+
+@McpController()
+export class StoreMediaFileTool {
+  private readonly logger = new Logger(StoreMediaFileTool.name);
+
+  constructor(private readonly ankiClient: AnkiConnectClient) {}
+
+  @Tool({
+    name: "storeMediaFile",
+    description:
+      "Upload a media file to Anki's collection.media folder. Supports base64 data, absolute file paths, or URLs. By default a file with the same name is overwritten.",
+    parameters: z.object({
+      filename: z
+        .string()
+        .describe(
+          'Filename to store in Anki (e.g., "pronunciation.mp3", "image.jpg")',
+        ),
+      data: z.string().optional().describe("Base64-encoded file content"),
+      path: z
+        .string()
+        .optional()
+        .describe(
+          "Absolute path to a local media file (images, audio, video only)",
+        ),
+      url: z.string().optional().describe("URL to download file from"),
+      deleteExisting: z
+        .boolean()
+        .optional()
+        .default(true)
+        .describe("Overwrite existing file (default: true)"),
+    }),
+    outputSchema: z.object({
+      success: z.boolean(),
+      filename: z.string(),
+      message: z.string(),
+      prefixedWithUnderscore: z.boolean(),
+    }),
+    annotations: {
+      title: "Store Media File",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  })
+  async execute(
+    @Payload()
+    params: {
+      filename: string;
+      data?: string;
+      path?: string;
+      url?: string;
+      deleteExisting?: boolean;
+    },
+  ) {
+    try {
+      this.logger.log(`Executing storeMediaFile: ${params.filename}`);
+
+      const result = await storeMediaFile(
+        {
+          filename: params.filename,
+          data: params.data,
+          path: params.path,
+          url: params.url,
+          deleteExisting: params.deleteExisting,
+        },
+        this.ankiClient,
+      );
+
+      return result;
+    } catch (error) {
+      this.logger.error("Failed to execute storeMediaFile", error);
+      return createErrorResponse(error, {
+        action: "storeMediaFile",
+        hint: "This can happen when Anki is not running or the media source (data/path/url) is invalid",
+      });
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "anki-card-builder",
+  "version": "0.1.0",
+  "description": "Turn your learning materials into Anki flashcards in bulk, with recommended front and back content and card layouts tailored to your learning goals.",
+  "author": {
+    "name": "Jia-57"
+  },
+  "repository": "https://github.com/Jia-57/anki-card-builder",
+  "license": "MIT",
+  "skills": [
+    "./.agents/skills/anki-card-builder"
+  ],
+  "mcpServers": "./.mcp.json"
+}

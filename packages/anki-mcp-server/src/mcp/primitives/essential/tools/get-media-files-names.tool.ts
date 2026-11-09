@@ -1,0 +1,60 @@
+import { Logger } from "@nestjs/common";
+import { Payload } from "@nestjs/microservices";
+import { McpController, Tool } from "@rekog/mcp-nest";
+import { z } from "zod";
+import { AnkiConnectClient } from "@/mcp/clients/anki-connect.client";
+import { createErrorResponse } from "@/mcp/utils/anki.utils";
+import { getMediaFilesNames } from "./mediaActions/actions/getMediaFilesNames.action";
+
+@McpController()
+export class GetMediaFilesNamesTool {
+  private readonly logger = new Logger(GetMediaFilesNamesTool.name);
+
+  constructor(private readonly ankiClient: AnkiConnectClient) {}
+
+  @Tool({
+    name: "getMediaFilesNames",
+    description:
+      "List media files in Anki's collection.media folder, optionally filtered by a glob-style pattern.",
+    parameters: z.object({
+      pattern: z
+        .string()
+        .optional()
+        .describe('Optional filter pattern (e.g., "*.mp3")'),
+    }),
+    outputSchema: z.object({
+      success: z.boolean(),
+      files: z.array(z.string()),
+      count: z.number(),
+      message: z.string(),
+      pattern: z.string().optional(),
+    }),
+    annotations: {
+      title: "List Media Files",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  })
+  async execute(@Payload() params: { pattern?: string }) {
+    try {
+      this.logger.log(
+        `Executing getMediaFilesNames${params.pattern ? ` (pattern: ${params.pattern})` : ""}`,
+      );
+
+      const result = await getMediaFilesNames(
+        { pattern: params.pattern },
+        this.ankiClient,
+      );
+
+      return result;
+    } catch (error) {
+      this.logger.error("Failed to execute getMediaFilesNames", error);
+      return createErrorResponse(error, {
+        action: "getMediaFilesNames",
+        hint: "This can happen when Anki is not running",
+      });
+    }
+  }
+}

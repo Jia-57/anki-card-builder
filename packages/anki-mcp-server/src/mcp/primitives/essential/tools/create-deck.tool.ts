@@ -1,0 +1,63 @@
+import { Logger } from "@nestjs/common";
+import { Payload } from "@nestjs/microservices";
+import { McpController, Tool } from "@rekog/mcp-nest";
+import { z } from "zod";
+import { AnkiConnectClient } from "@/mcp/clients/anki-connect.client";
+import { createErrorResponse } from "@/mcp/utils/anki.utils";
+import { createDeck } from "./deckActions/actions/createDeck.action";
+
+@McpController()
+export class CreateDeckTool {
+  private readonly logger = new Logger(CreateDeckTool.name);
+
+  constructor(private readonly ankiClient: AnkiConnectClient) {}
+
+  @Tool({
+    name: "createDeck",
+    description:
+      'Create a new empty Anki deck. Use "::" between hierarchy levels (e.g., "Japanese::JLPT N5::Vocabulary"). Will not overwrite existing decks.',
+    parameters: z.object({
+      deckName: z
+        .string()
+        .describe(
+          'The name of the deck to create. Use "::" between hierarchy levels',
+        ),
+    }),
+    outputSchema: z.object({
+      success: z.boolean(),
+      deckId: z.number().optional(),
+      deckName: z.string(),
+      message: z.string(),
+      created: z.boolean(),
+      exists: z.boolean().optional(),
+      parentDeck: z.string().optional(),
+      childDeck: z.string().optional(),
+      parentExisted: z.boolean().optional(),
+    }),
+    annotations: {
+      title: "Create Deck",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  })
+  async execute(@Payload() params: { deckName: string }) {
+    try {
+      this.logger.log(`Executing createDeck: ${params.deckName}`);
+
+      const result = await createDeck(
+        { deckName: params.deckName },
+        this.ankiClient,
+      );
+
+      return result;
+    } catch (error) {
+      this.logger.error("Failed to execute createDeck", error);
+      return createErrorResponse(error, {
+        action: "createDeck",
+        hint: "This can happen when Anki is not running or the deck name is wrong",
+      });
+    }
+  }
+}

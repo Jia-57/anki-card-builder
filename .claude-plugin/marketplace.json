@@ -1,0 +1,18 @@
+{
+  "name": "anki-card-builder",
+  "description": "Turn your learning materials into Anki flashcards in bulk, with recommended front and back content and card layouts tailored to your learning goals.",
+  "owner": {
+    "name": "Anki Card Builder"
+  },
+  "owner": {
+    "name": "Jia-57"
+  },
+  "plugins": [
+    {
+      "name": "anki-card-builder",
+      "source": "./",
+      "description": "Turn your learning materials into Anki flashcards in bulk, with recommended front and back content and card layouts tailored to your learning goals.",
+      "category": "productivity"
+    }
+  ]
+}

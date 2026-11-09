@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "anki-card-builder": {
+      "command": "anki-card-builder-mcp",
+      "args": [
+        "--stdio"
+      ]
+    }
+  }
+}

@@ -1,0 +1,464 @@
+import { Test, TestingModule } from "@nestjs/testing";
+import { GetCardsTool } from "../get-cards.tool";
+import { AnkiConnectClient } from "../../../../clients/anki-connect.client";
+import { mockCards } from "../../../../../test-fixtures/mock-data";
+import { parseToolResult } from "../../../../../test-fixtures/test-helpers";
+import { AnkiCard } from "../../../../types/anki.types";
+
+// Mock the AnkiConnectClient
+jest.mock("../../../../clients/anki-connect.client");
+
+describe("GetCardsTool", () => {
+  let tool: GetCardsTool;
+  let ankiClient: jest.Mocked<AnkiConnectClient>;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [GetCardsTool, AnkiConnectClient],
+    }).compile();
+
+    tool = module.get<GetCardsTool>(GetCardsTool);
+    ankiClient = module.get(
+      AnkiConnectClient,
+    ) as jest.Mocked<AnkiConnectClient>;
+
+    // Setup mock context
+
+    // Clear all mocks before each test
+    jest.clearAllMocks();
+  });
+
+  describe("getCards", () => {
+    const mockCardIds = [1502298033754, 1502298033758];
+    const mockCardsInfo: AnkiCard[] = [
+      {
+        ...mockCards.dueCard,
+        fields: {
+          Front: { value: "¿Cómo estás?", order: 0 },
+          Back: { value: "How are you?", order: 1 },
+        },
+      },
+      {
+        ...mockCards.newCard,
+        fields: {
+          Front: { value: "こんにちは", order: 0 },
+          Back: { value: "Hello", order: 1 },
+        },
+      },
+    ];
+
+    it("should return due cards by default with suspended excluded", async () => {
+      // Arrange
+      ankiClient.invoke
+        .mockResolvedValueOnce(mockCardIds) // findCards
+        .mockResolvedValueOnce(mockCardsInfo); // cardsInfo
+
+      // Act
+      const rawResult = await tool.getCards({});
+      const result = parseToolResult(rawResult);
+
+      // Assert
+      expect(ankiClient.invoke).toHaveBeenCalledTimes(2);
+      expect(ankiClient.invoke).toHaveBeenNthCalledWith(1, "findCards", {
+        query: "-is:suspended is:due",
+      });
+      expect(ankiClient.invoke).toHaveBeenNthCalledWith(2, "cardsInfo", {
+        cards: mockCardIds,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.cards).toHaveLength(2);
+      expect(result.total).toBe(2);
+      expect(result.returned).toBe(2);
+      expect(result.message).toContain("Found 2 due cards");
+    });
+
+    it("should filter by new card state with suspended excluded", async () => {
+      // Arrange
+      const newCardIds = [1502298033758];
+      const newCardsInfo = [mockCardsInfo[1]];
+      ankiClient.invoke
+        .mockResolvedValueOnce(newCardIds)
+        .mockResolvedValueOnce(newCardsInfo);
+
+      // Act
+      const rawResult = await tool.getCards({ card_state: "new" });
+      const result = parseToolResult(rawResult);
+
+      // Assert
+      expect(ankiClient.invoke).toHaveBeenNthCalledWith(1, "findCards", {
+        query: "-is:suspended is:new",
+      });
+      expect(result.success).toBe(true);
+      expect(result.cards).toHaveLength(1);
+      expect(result.message).toContain("new cards");
+    });
+
+    it("should filter by learning card state with suspended excluded", async () => {
+      // Arrange
+      ankiClient.invoke
+        .mockResolvedValueOnce([1502298033758])
+        .mockResolvedValueOnce([mockCardsInfo[1]]);
+
+      // Act
+      const rawResult = await tool.getCards({ card_state: "learning" });
+      const result = parseToolResult(rawResult);
+
+      // Assert
+      expect(ankiClient.invoke).toHaveBeenNthCalledWith(1, "findCards", {
+        query: "-is:suspended is:learn",
+      });
+      expect(result.success).toBe(true);
+      expect(result.message).toContain("learning cards");
+    });
+
+    it("should filter by suspended card state without excluding suspended", async () => {
+      // Arrange
+      ankiClient.invoke
+        .mockResolvedValueOnce([1502298033758])
+        .mockResolvedValueOnce([mockCardsInfo[1]]);
+
+      // Act
+      const rawResult = await tool.getCards({ card_state: "suspended" });
+      const result = parseToolResult(rawResult);
+
+      // Assert - should NOT have -is:suspended prefix when querying for suspended
+      expect(ankiClient.invoke).toHaveBeenNthCalledWith(1, "findCards", {
+        query: "is:suspended",
+      });
+      expect(result.success).toBe(true);
+      expect(result.message).toContain("suspended cards");
+    });
+
+    it("should filter by buried card state with suspended excluded", async () => {
+      // Arrange
+      ankiClient.invoke
+        .mockResolvedValueOnce([1502298033758])
+        .mockResolvedValueOnce([mockCardsInfo[1]]);
+
+      // Act
+      const rawResult = await tool.getCards({ card_state: "buried" });
+      const result = parseToolResult(rawResult);
+
+      // Assert
+      expect(ankiClient.invoke).toHaveBeenNthCalledWith(1, "findCards", {
+        query: "-is:suspended is:buried",
+      });
+      expect(result.success).toBe(true);
+      expect(result.message).toContain("buried cards");
+    });
+
+    it("should filter by deck name with suspended excluded", async () => {
+      // Arrange
+      ankiClient.invoke
+        .mockResolvedValueOnce(mockCardIds)
+        .mockResolvedValueOnce(mockCardsInfo);
+
+      // Act
+      const rawResult = await tool.getCards({
+        deck_name: "Spanish",
+        card_state: "due",
+      });
+      const result = parseToolResult(rawResult);
+
+      // Assert
+      expect(ankiClient.invoke).toHaveBeenNthCalledWith(1, "findCards", {
+        query: '"deck:Spanish" -is:suspended is:due',
+      });
+      expect(result.success).toBe(true);
+      expect(result.cards).toHaveLength(2);
+    });
+
+    it("should escape special characters in deck name", async () => {
+      // Arrange
+      ankiClient.invoke.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+
+      // Act
+      await tool.getCards({
+        deck_name: 'Deck with "quotes"',
+        card_state: "new",
+      });
+
+      // Assert
+      expect(ankiClient.invoke).toHaveBeenNthCalledWith(1, "findCards", {
+        query: '"deck:Deck with \\"quotes\\"" -is:suspended is:new',
+      });
+    });
+
+    it("should escape Anki wildcards so a deck name matches literally", async () => {
+      // `_` and `*` stay active inside double quotes, so an unescaped
+      // "JLPT_N5" would also match a sibling deck named "JLPT-N5".
+      ankiClient.invoke.mockResolvedValueOnce([]);
+
+      await tool.getCards({ deck_name: "JLPT_N5", card_state: "new" });
+
+      expect(ankiClient.invoke).toHaveBeenNthCalledWith(1, "findCards", {
+        query: '"deck:JLPT\\_N5" -is:suspended is:new',
+      });
+    });
+
+    it("should escape backslashes in a deck name", async () => {
+      // Unescaped, `\P` is an invalid escape sequence and AnkiConnect errors.
+      ankiClient.invoke.mockResolvedValueOnce([]);
+
+      await tool.getCards({ deck_name: "Math\\Physics", card_state: "new" });
+
+      expect(ankiClient.invoke).toHaveBeenNthCalledWith(1, "findCards", {
+        query: '"deck:Math\\\\Physics" -is:suspended is:new',
+      });
+    });
+
+    it("should leave :: subdeck separators intact", async () => {
+      ankiClient.invoke.mockResolvedValueOnce([]);
+
+      await tool.getCards({
+        deck_name: "Japanese::JLPT N5",
+        card_state: "new",
+      });
+
+      expect(ankiClient.invoke).toHaveBeenNthCalledWith(1, "findCards", {
+        query: '"deck:Japanese::JLPT N5" -is:suspended is:new',
+      });
+    });
+
+    it("should respect the limit parameter", async () => {
+      // Arrange
+      const manyCardIds = Array.from(
+        { length: 20 },
+        (_, i) => 1500000000000 + i,
+      );
+      ankiClient.invoke
+        .mockResolvedValueOnce(manyCardIds)
+        .mockResolvedValueOnce(mockCardsInfo.slice(0, 5));
+
+      // Act
+      const rawResult = await tool.getCards({ limit: 5 });
+      const result = parseToolResult(rawResult);
+
+      // Assert
+      expect(ankiClient.invoke).toHaveBeenNthCalledWith(2, "cardsInfo", {
+        cards: manyCardIds.slice(0, 5),
+      });
+      expect(result.success).toBe(true);
+      expect(result.total).toBe(20);
+      expect(result.returned).toBe(2); // mockCardsInfo has only 2 items
+      expect(result.message).toContain("Found 20 due cards, returning 2");
+    });
+
+    it("should skip a card deleted between findCards and cardsInfo", async () => {
+      // AnkiConnect returns `{}` in the slot of a card that no longer exists.
+      ankiClient.invoke
+        .mockResolvedValueOnce(mockCardIds) // findCards
+        .mockResolvedValueOnce([{}, mockCardsInfo[1]]); // cardsInfo
+
+      const rawResult = await tool.getCards({});
+      const result = parseToolResult(rawResult);
+
+      expect(result.success).toBe(true);
+      expect(result.cards).toHaveLength(1);
+      expect(result.cards[0].cardId).toBe(mockCardsInfo[1].cardId);
+      expect(result.total).toBe(1);
+      expect(result.returned).toBe(1);
+      expect(result.message).toBe("Found 1 due cards, returning 1");
+    });
+
+    it("should return no cards when every selected card was deleted", async () => {
+      ankiClient.invoke
+        .mockResolvedValueOnce(mockCardIds)
+        .mockResolvedValueOnce([{}, {}]);
+
+      const rawResult = await tool.getCards({});
+      const result = parseToolResult(rawResult);
+
+      expect(result.success).toBe(true);
+      expect(result.cards).toEqual([]);
+      expect(result.total).toBe(0);
+      expect(result.returned).toBe(0);
+    });
+
+    it("should enforce maximum limit of 50", async () => {
+      // Arrange
+      const manyCardIds = Array.from(
+        { length: 100 },
+        (_, i) => 1500000000000 + i,
+      );
+      ankiClient.invoke
+        .mockResolvedValueOnce(manyCardIds)
+        .mockResolvedValueOnce(mockCardsInfo);
+
+      // Act
+      await tool.getCards({ limit: 100 });
+
+      // Assert - should only request 50 cards max
+      expect(ankiClient.invoke).toHaveBeenNthCalledWith(2, "cardsInfo", {
+        cards: manyCardIds.slice(0, 50),
+      });
+    });
+
+    it("should return empty array when no cards found", async () => {
+      // Arrange
+      ankiClient.invoke.mockResolvedValueOnce([]);
+
+      // Act
+      const rawResult = await tool.getCards({ card_state: "suspended" });
+      const result = parseToolResult(rawResult);
+
+      // Assert
+      expect(result.success).toBe(true);
+      expect(result.message).toBe("No suspended cards found");
+      expect(result.cards).toEqual([]);
+      expect(result.total).toBe(0);
+    });
+
+    it("should handle network errors gracefully", async () => {
+      // Arrange
+      const networkError = new Error("fetch failed");
+      ankiClient.invoke.mockRejectedValueOnce(networkError);
+
+      // Act
+      const rawResult = await tool.getCards({});
+      const result = parseToolResult(rawResult);
+
+      // Assert
+      expect(result.success).toBe(false);
+      expect(result.error).toBeDefined();
+      expect(result.error).toContain("fetch failed");
+    });
+
+    it("should handle AnkiConnect errors when getting card info", async () => {
+      // Arrange
+      ankiClient.invoke
+        .mockResolvedValueOnce(mockCardIds)
+        .mockRejectedValueOnce(
+          new Error("AnkiConnect error: collection is not available"),
+        );
+
+      // Act
+      const rawResult = await tool.getCards({});
+      const result = parseToolResult(rawResult);
+
+      // Assert
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("collection is not available");
+    });
+
+    it("should transform cards to simplified structure without the answer by default", async () => {
+      // Arrange
+      ankiClient.invoke
+        .mockResolvedValueOnce([mockCardIds[0]])
+        .mockResolvedValueOnce([mockCardsInfo[0]]);
+
+      // Act
+      const rawResult = await tool.getCards({});
+      const result = parseToolResult(rawResult);
+
+      // Assert
+      expect(result.success).toBe(true);
+      expect(result.cards[0]).toMatchObject({
+        cardId: 1502298033754,
+        front: "¿Cómo estás?",
+        deckName: "Spanish",
+        modelName: "Basic",
+        due: 1,
+        interval: 1,
+        factor: 2500,
+      });
+      // Answers must never enter context unless explicitly requested.
+      expect(result.cards[0]).not.toHaveProperty("back");
+    });
+
+    it("should omit the answer when include_answer is explicitly false", async () => {
+      // Arrange
+      ankiClient.invoke
+        .mockResolvedValueOnce([mockCardIds[0]])
+        .mockResolvedValueOnce([mockCardsInfo[0]]);
+
+      // Act
+      const rawResult = await tool.getCards({ include_answer: false });
+      const result = parseToolResult(rawResult);
+
+      // Assert
+      expect(result.success).toBe(true);
+      expect(result.cards[0]).not.toHaveProperty("back");
+    });
+
+    it("should include the answer when include_answer is true", async () => {
+      // Arrange
+      ankiClient.invoke
+        .mockResolvedValueOnce([mockCardIds[0]])
+        .mockResolvedValueOnce([mockCardsInfo[0]]);
+
+      // Act
+      const rawResult = await tool.getCards({ include_answer: true });
+      const result = parseToolResult(rawResult);
+
+      // Assert
+      expect(result.success).toBe(true);
+      expect(result.cards[0]).toMatchObject({
+        cardId: 1502298033754,
+        front: "¿Cómo estás?",
+        back: "How are you?",
+        deckName: "Spanish",
+        modelName: "Basic",
+        due: 1,
+        interval: 1,
+        factor: 2500,
+      });
+    });
+
+    it("renders each card of a multi-card note per its template ordinal when include_answer is true", async () => {
+      // A "Basic (and reversed card)" note yields two cards. The forward card
+      // (ord 0) renders Front->Back; the reversed card (ord 1) renders
+      // Back->Front. Field-based extraction returned identical content for both;
+      // per-card rendering (question/answer) must not.
+      const sharedFields = {
+        Front: { value: "こんにちは", order: 0 },
+        Back: { value: "Hello", order: 1 },
+      };
+      const reversedPair: AnkiCard[] = [
+        { ...mockCards.reversedForward, fields: sharedFields },
+        { ...mockCards.reversedBackward, fields: sharedFields },
+      ];
+
+      ankiClient.invoke
+        .mockResolvedValueOnce(reversedPair.map((c) => c.cardId))
+        .mockResolvedValueOnce(reversedPair);
+
+      const result = parseToolResult(
+        await tool.getCards({ include_answer: true }),
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.cards[0]).toMatchObject({
+        front: "こんにちは",
+        back: "Hello",
+      });
+      // The reversed card must show the OPPOSITE direction, not a duplicate.
+      expect(result.cards[1]).toMatchObject({
+        front: "Hello",
+        back: "こんにちは",
+      });
+      expect(result.cards[1].front).not.toBe(result.cards[0].front);
+    });
+
+    it("should combine deck filter with new card state", async () => {
+      // Arrange
+      ankiClient.invoke
+        .mockResolvedValueOnce([mockCardIds[1]])
+        .mockResolvedValueOnce([mockCardsInfo[1]]);
+
+      // Act
+      const rawResult = await tool.getCards({
+        deck_name: "Japanese::JLPT N5",
+        card_state: "new",
+      });
+      const result = parseToolResult(rawResult);
+
+      // Assert
+      expect(ankiClient.invoke).toHaveBeenNthCalledWith(1, "findCards", {
+        query: '"deck:Japanese::JLPT N5" -is:suspended is:new',
+      });
+      expect(result.success).toBe(true);
+    });
+  });
+});
